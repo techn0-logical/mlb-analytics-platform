@@ -1528,3 +1528,318 @@ ANALYZE player_batting_stats;
 ANALYZE player_pitching_stats;
 ANALYZE player_matchups;
 ANALYZE player_matchup_summaries;
+
+-- ================================================================================
+-- SECTION 8: PREDICTION PERFORMANCE TRACKING TABLES
+-- ================================================================================
+-- Tables for tracking MLB betting prediction accuracy over time
+-- Supports performance analysis across confidence levels and betting recommendations
+
+-- Main daily prediction performance summary
+CREATE TABLE IF NOT EXISTS prediction_performance (
+    id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    model_version VARCHAR(50) NOT NULL,
+    total_games INTEGER NOT NULL CHECK (total_games >= 0),
+    correct_predictions INTEGER NOT NULL CHECK (correct_predictions >= 0 AND correct_predictions <= total_games),
+    overall_accuracy DECIMAL(5,2) NOT NULL CHECK (overall_accuracy >= 0 AND overall_accuracy <= 100),
+    expected_accuracy DECIMAL(5,2) NOT NULL CHECK (expected_accuracy >= 0 AND expected_accuracy <= 100),
+    performance_vs_expected DECIMAL(6,2) NOT NULL CHECK (performance_vs_expected >= -100 AND performance_vs_expected <= 100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_prediction_performance_date_model UNIQUE(date, model_version)
+);
+
+-- Performance breakdown by confidence level ranges
+CREATE TABLE IF NOT EXISTS confidence_level_performance (
+    id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    model_version VARCHAR(50) NOT NULL,
+    confidence_range VARCHAR(20) NOT NULL CHECK (confidence_range IN ('50-60%', '60-70%', '70-80%', '80-90%', '90%+')),
+    total_games INTEGER NOT NULL CHECK (total_games >= 0),
+    correct_predictions INTEGER NOT NULL CHECK (correct_predictions >= 0 AND correct_predictions <= total_games),
+    accuracy DECIMAL(5,2) NOT NULL CHECK (accuracy >= 0 AND accuracy <= 100),
+    avg_confidence DECIMAL(5,2) NOT NULL CHECK (avg_confidence >= 50 AND avg_confidence <= 100),
+    min_confidence DECIMAL(5,2) NOT NULL CHECK (min_confidence >= 50 AND min_confidence <= 100),
+    max_confidence DECIMAL(5,2) NOT NULL CHECK (max_confidence >= 50 AND max_confidence <= 100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_confidence_performance_date_model_range UNIQUE(date, model_version, confidence_range),
+    CONSTRAINT fk_confidence_performance_main FOREIGN KEY (date, model_version) 
+        REFERENCES prediction_performance(date, model_version) ON DELETE CASCADE
+);
+
+-- Performance breakdown by betting recommendation type
+CREATE TABLE IF NOT EXISTS betting_performance (
+    id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    model_version VARCHAR(50) NOT NULL,
+    bet_type VARCHAR(20) NOT NULL CHECK (bet_type IN ('STRONG', 'MODERATE', 'WEAK', 'AVOID')),
+    total_bets INTEGER NOT NULL CHECK (total_bets >= 0),
+    correct_bets INTEGER NOT NULL CHECK (correct_bets >= 0 AND correct_bets <= total_bets),
+    accuracy DECIMAL(5,2) NOT NULL CHECK (accuracy >= 0 AND accuracy <= 100),
+    avg_confidence DECIMAL(5,2) NOT NULL CHECK (avg_confidence >= 50 AND avg_confidence <= 100),
+    is_betting_opportunity BOOLEAN NOT NULL DEFAULT FALSE,
+    profit_loss DECIMAL(10,2) DEFAULT 0, -- For future ROI tracking
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_betting_performance_date_model_type UNIQUE(date, model_version, bet_type),
+    CONSTRAINT fk_betting_performance_main FOREIGN KEY (date, model_version) 
+        REFERENCES prediction_performance(date, model_version) ON DELETE CASCADE
+);
+
+-- Detailed individual game prediction results
+CREATE TABLE IF NOT EXISTS game_prediction_results (
+    id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    game_pk BIGINT NOT NULL,
+    away_team VARCHAR(3) NOT NULL REFERENCES teams(team_id),
+    home_team VARCHAR(3) NOT NULL REFERENCES teams(team_id),
+    predicted_winner VARCHAR(3) NOT NULL REFERENCES teams(team_id),
+    actual_winner VARCHAR(3) REFERENCES teams(team_id),
+    confidence DECIMAL(5,2) NOT NULL CHECK (confidence >= 0 AND confidence <= 100),
+    betting_recommendation VARCHAR(20) NOT NULL CHECK (betting_recommendation IN ('STRONG', 'MODERATE', 'WEAK', 'AVOID')),
+    is_betting_opportunity BOOLEAN NOT NULL DEFAULT FALSE,
+    is_correct BOOLEAN,
+    final_score VARCHAR(10),
+    away_score INTEGER CHECK (away_score >= 0),
+    home_score INTEGER CHECK (home_score >= 0),
+    model_version VARCHAR(50) NOT NULL,
+    h2h_sample_size INTEGER CHECK (h2h_sample_size >= 0),
+    data_quality DECIMAL(4,3) CHECK (data_quality >= 0 AND data_quality <= 1),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_game_prediction_results_date_game UNIQUE(date, game_pk, model_version),
+    CONSTRAINT fk_game_prediction_results_main FOREIGN KEY (date, model_version) 
+        REFERENCES prediction_performance(date, model_version) ON DELETE CASCADE,
+    CONSTRAINT chk_game_prediction_results_teams CHECK (away_team != home_team),
+    CONSTRAINT chk_game_prediction_results_winner CHECK (
+        predicted_winner IN (away_team, home_team) AND 
+        (actual_winner IS NULL OR actual_winner IN (away_team, home_team))
+    )
+);
+
+-- ================================================================================
+-- INDEXES FOR PREDICTION PERFORMANCE TABLES
+-- ================================================================================
+
+-- Main performance table indexes
+CREATE INDEX IF NOT EXISTS idx_prediction_performance_date ON prediction_performance(date DESC);
+CREATE INDEX IF NOT EXISTS idx_prediction_performance_model_version ON prediction_performance(model_version);
+CREATE INDEX IF NOT EXISTS idx_prediction_performance_accuracy ON prediction_performance(overall_accuracy DESC);
+
+-- Confidence level performance indexes
+CREATE INDEX IF NOT EXISTS idx_confidence_performance_date_range ON confidence_level_performance(date DESC, confidence_range);
+CREATE INDEX IF NOT EXISTS idx_confidence_performance_accuracy ON confidence_level_performance(confidence_range, accuracy DESC);
+
+-- Betting performance indexes
+CREATE INDEX IF NOT EXISTS idx_betting_performance_date_type ON betting_performance(date DESC, bet_type);
+CREATE INDEX IF NOT EXISTS idx_betting_performance_opportunities ON betting_performance(is_betting_opportunity, accuracy DESC);
+CREATE INDEX IF NOT EXISTS idx_betting_performance_profit ON betting_performance(bet_type, profit_loss DESC);
+
+-- Game results indexes
+CREATE INDEX IF NOT EXISTS idx_game_results_date_correct ON game_prediction_results(date DESC, is_correct);
+CREATE INDEX IF NOT EXISTS idx_game_results_confidence ON game_prediction_results(confidence DESC, is_correct);
+CREATE INDEX IF NOT EXISTS idx_game_results_betting_opp ON game_prediction_results(is_betting_opportunity, betting_recommendation, is_correct);
+CREATE INDEX IF NOT EXISTS idx_game_results_teams ON game_prediction_results(away_team, home_team);
+
+-- Composite indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_prediction_performance_trend ON prediction_performance(model_version, date DESC, overall_accuracy);
+CREATE INDEX IF NOT EXISTS idx_confidence_trend ON confidence_level_performance(model_version, confidence_range, date DESC, accuracy);
+CREATE INDEX IF NOT EXISTS idx_betting_trend ON betting_performance(model_version, bet_type, is_betting_opportunity, date DESC, accuracy);
+
+-- ================================================================================
+-- SECTION 9: DAILY PREDICTIONS STORAGE TABLE
+-- ================================================================================
+-- Table for storing all daily prediction data directly in database
+-- Eliminates need for large JSON files and enables efficient querying
+
+-- Daily predictions storage table
+CREATE TABLE IF NOT EXISTS daily_predictions (
+    id SERIAL PRIMARY KEY,
+    prediction_date DATE NOT NULL,
+    game_pk BIGINT NOT NULL,
+    away_team VARCHAR(3) NOT NULL,
+    home_team VARCHAR(3) NOT NULL,
+    predicted_winner VARCHAR(3) NOT NULL,
+    confidence DECIMAL(5,2) NOT NULL CHECK (confidence >= 0 AND confidence <= 100),
+    betting_recommendation VARCHAR(20) NOT NULL CHECK (betting_recommendation IN ('STRONG', 'MODERATE', 'WEAK', 'AVOID')),
+    is_betting_opportunity BOOLEAN NOT NULL DEFAULT FALSE,
+    data_quality DECIMAL(4,3) CHECK (data_quality >= 0 AND data_quality <= 1),
+    h2h_sample_size INTEGER CHECK (h2h_sample_size >= 0),
+    model_version VARCHAR(50) NOT NULL,
+    prediction_timestamp TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Metadata from prediction session
+    session_total_games INTEGER,
+    session_betting_opportunities INTEGER,
+    session_model_accuracy DECIMAL(5,2),
+    session_high_confidence_accuracy DECIMAL(5,2),
+    
+    CONSTRAINT uq_daily_predictions_date_game UNIQUE(prediction_date, game_pk, model_version),
+    CONSTRAINT chk_daily_predictions_teams CHECK (away_team != home_team),
+    CONSTRAINT chk_daily_predictions_winner CHECK (predicted_winner IN (away_team, home_team))
+);
+
+-- ================================================================================
+-- INDEXES FOR DAILY PREDICTIONS TABLE
+-- ================================================================================
+
+-- Primary access patterns
+CREATE INDEX IF NOT EXISTS idx_daily_predictions_date ON daily_predictions(prediction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_predictions_game_pk ON daily_predictions(game_pk);
+CREATE INDEX IF NOT EXISTS idx_daily_predictions_confidence ON daily_predictions(confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_predictions_betting ON daily_predictions(betting_recommendation, is_betting_opportunity);
+CREATE INDEX IF NOT EXISTS idx_daily_predictions_model ON daily_predictions(model_version, prediction_date DESC);
+
+-- Analysis and reporting indexes
+CREATE INDEX IF NOT EXISTS idx_daily_predictions_date_confidence ON daily_predictions(prediction_date, confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_predictions_model_betting ON daily_predictions(model_version, betting_recommendation, confidence DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_predictions_opportunities ON daily_predictions(is_betting_opportunity, prediction_date DESC, confidence DESC);
+
+-- ================================================================================
+-- SECTION 9: ADAPTIVE LEARNING TABLES
+-- ================================================================================
+
+-- ================================================================================
+-- SECTION 9.0: TRAINED MODELS STORAGE TABLE
+-- ================================================================================
+-- Store serialized ML models in the database instead of .pkl files
+-- Only one active model per model_name at a time
+
+CREATE TABLE IF NOT EXISTS trained_models (
+    model_id        SERIAL PRIMARY KEY,
+    model_name      VARCHAR(100) NOT NULL,
+    model_version   VARCHAR(50) NOT NULL,
+    model_type      VARCHAR(30) NOT NULL DEFAULT 'xgboost',
+    model_binary    BYTEA NOT NULL,
+    feature_names   JSONB NOT NULL,
+    metadata        JSONB,
+    training_accuracy   DECIMAL(5,4),
+    test_accuracy       DECIMAL(5,4),
+    cv_accuracy         DECIMAL(5,4),
+    feature_count       INTEGER,
+    sample_count        INTEGER,
+    training_years      JSONB,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_model ON trained_models(model_name) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_trained_models_active ON trained_models(is_active, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trained_models_name ON trained_models(model_name, is_active);
+
+COMMENT ON TABLE trained_models IS 'Serialized ML models stored as binary. Only one active model per model_name at a time.';
+COMMENT ON COLUMN trained_models.model_binary IS 'Pickled model + scaler as bytes';
+COMMENT ON COLUMN trained_models.feature_names IS 'Ordered list of feature names the model expects';
+
+-- ================================================================================
+-- Tables for incremental model learning without full retraining
+-- Enables daily adaptation based on prediction performance
+
+-- Track feature performance over time for dynamic weighting
+CREATE TABLE IF NOT EXISTS feature_performance (
+    id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    model_version VARCHAR(50) NOT NULL,
+    feature_name VARCHAR(50) NOT NULL,
+    weight_adjustment DECIMAL(4,3) NOT NULL DEFAULT 1.000 CHECK (weight_adjustment >= 0.001 AND weight_adjustment <= 10.000),
+    performance_score DECIMAL(5,2) NOT NULL CHECK (performance_score >= 0 AND performance_score <= 100),
+    sample_size INTEGER NOT NULL DEFAULT 0 CHECK (sample_size >= 0),
+    significance_level DECIMAL(4,3) DEFAULT 0.050 CHECK (significance_level >= 0 AND significance_level <= 1),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_feature_performance_date_model_feature UNIQUE(date, model_version, feature_name)
+);
+
+-- Track confidence calibration for dynamic threshold adjustment
+CREATE TABLE IF NOT EXISTS confidence_calibration (
+    id SERIAL PRIMARY KEY,
+    model_version VARCHAR(50) NOT NULL,
+    confidence_range VARCHAR(20) NOT NULL CHECK (confidence_range IN ('50-60%', '60-70%', '70-80%', '80-90%', '90%+')),
+    predicted_accuracy DECIMAL(5,2) NOT NULL CHECK (predicted_accuracy >= 0 AND predicted_accuracy <= 100),
+    actual_accuracy DECIMAL(5,2) NOT NULL CHECK (actual_accuracy >= 0 AND actual_accuracy <= 100),
+    calibration_factor DECIMAL(6,4) NOT NULL DEFAULT 1.0000 CHECK (calibration_factor >= 0.1000 AND calibration_factor <= 10.0000),
+    sample_size INTEGER NOT NULL DEFAULT 0 CHECK (sample_size >= 0),
+    last_updated DATE NOT NULL,
+    confidence_lower_bound DECIMAL(5,2) CHECK (confidence_lower_bound >= 50 AND confidence_lower_bound <= 100),
+    confidence_upper_bound DECIMAL(5,2) CHECK (confidence_upper_bound >= 50 AND confidence_upper_bound <= 100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_confidence_calibration_model_range UNIQUE(model_version, confidence_range),
+    CONSTRAINT chk_confidence_bounds CHECK (confidence_upper_bound > confidence_lower_bound)
+);
+
+-- Store dynamic model parameters for adaptive predictions
+CREATE TABLE IF NOT EXISTS model_parameters (
+    id SERIAL PRIMARY KEY,
+    parameter_name VARCHAR(50) NOT NULL,
+    parameter_category VARCHAR(30) NOT NULL CHECK (parameter_category IN ('threshold', 'weight', 'calibration', 'team_adjustment', 'feature_scaling')),
+    parameter_value DECIMAL(10,6) NOT NULL,
+    default_value DECIMAL(10,6) NOT NULL,
+    parameter_type VARCHAR(20) NOT NULL CHECK (parameter_type IN ('float', 'percentage', 'multiplier', 'offset')),
+    min_value DECIMAL(10,6),
+    max_value DECIMAL(10,6),
+    last_updated DATE NOT NULL,
+    performance_impact DECIMAL(5,2) DEFAULT 0.00 CHECK (performance_impact >= -100 AND performance_impact <= 100),
+    update_frequency VARCHAR(20) DEFAULT 'daily' CHECK (update_frequency IN ('daily', 'weekly', 'monthly')),
+    model_version VARCHAR(50) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_model_parameters_name_model UNIQUE(parameter_name, model_version),
+    CONSTRAINT chk_parameter_bounds CHECK (
+        (min_value IS NULL OR max_value IS NULL) OR 
+        (parameter_value >= min_value AND parameter_value <= max_value)
+    )
+);
+
+-- Store team-specific performance adjustments
+CREATE TABLE IF NOT EXISTS team_performance_adjustments (
+    id SERIAL PRIMARY KEY,
+    team_id VARCHAR(3) NOT NULL REFERENCES teams(team_id),
+    adjustment_type VARCHAR(30) NOT NULL CHECK (adjustment_type IN ('home_advantage', 'away_performance', 'recent_form', 'head_to_head', 'confidence_boost')),
+    adjustment_value DECIMAL(6,4) NOT NULL DEFAULT 1.0000 CHECK (adjustment_value >= 0.1000 AND adjustment_value <= 5.0000),
+    context_filter VARCHAR(100), -- e.g., 'vs_AL_East', 'home_weekend', 'high_scoring_games'
+    sample_size INTEGER NOT NULL DEFAULT 0 CHECK (sample_size >= 0),
+    confidence_interval DECIMAL(4,3) DEFAULT 0.950 CHECK (confidence_interval >= 0.500 AND confidence_interval <= 0.999),
+    performance_gain DECIMAL(5,2) DEFAULT 0.00 CHECK (performance_gain >= -50 AND performance_gain <= 50),
+    last_calculated DATE NOT NULL,
+    expiry_date DATE,
+    model_version VARCHAR(50) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_team_adjustments_team_type_model UNIQUE(team_id, adjustment_type, model_version, context_filter)
+);
+
+-- ================================================================================
+-- INDEXES FOR ADAPTIVE LEARNING TABLES
+-- ================================================================================
+
+-- Feature performance indexes
+CREATE INDEX IF NOT EXISTS idx_feature_performance_date ON feature_performance(date DESC, model_version);
+CREATE INDEX IF NOT EXISTS idx_feature_performance_feature ON feature_performance(feature_name, performance_score DESC);
+CREATE INDEX IF NOT EXISTS idx_feature_performance_weight ON feature_performance(weight_adjustment, performance_score);
+
+-- Confidence calibration indexes
+CREATE INDEX IF NOT EXISTS idx_confidence_calibration_model ON confidence_calibration(model_version, last_updated DESC);
+CREATE INDEX IF NOT EXISTS idx_confidence_calibration_range ON confidence_calibration(confidence_range, calibration_factor);
+CREATE INDEX IF NOT EXISTS idx_confidence_calibration_accuracy ON confidence_calibration(actual_accuracy DESC, sample_size);
+
+-- Model parameters indexes
+CREATE INDEX IF NOT EXISTS idx_model_parameters_category ON model_parameters(parameter_category, is_active, last_updated DESC);
+CREATE INDEX IF NOT EXISTS idx_model_parameters_performance ON model_parameters(performance_impact DESC, is_active);
+CREATE INDEX IF NOT EXISTS idx_model_parameters_model_version ON model_parameters(model_version, is_active, parameter_category);
+
+-- Team adjustments indexes
+CREATE INDEX IF NOT EXISTS idx_team_adjustments_team ON team_performance_adjustments(team_id, is_active, adjustment_type);
+CREATE INDEX IF NOT EXISTS idx_team_adjustments_performance ON team_performance_adjustments(performance_gain DESC, sample_size);
+CREATE INDEX IF NOT EXISTS idx_team_adjustments_model ON team_performance_adjustments(model_version, is_active, last_calculated DESC);

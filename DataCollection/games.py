@@ -55,6 +55,21 @@ def collect_games_for_date(target_date: date) -> tuple[int, int, int]:
                     if not home_team_id or not away_team_id:
                         continue
                     
+                    # Skip exhibition games and non-MLB teams
+                    game_type = game.get('gameType', '')
+                    if game_type == 'E':  # Skip exhibition games
+                        continue
+                        
+                    # Verify both teams are valid MLB teams (after normalization)
+                    valid_mlb_teams = {
+                        'ATL', 'AZ', 'BAL', 'BOS', 'CHC', 'CHW', 'CIN', 'CLE', 'COL', 'DET',
+                        'HOU', 'KC', 'LAA', 'LAD', 'MIA', 'MIL', 'MIN', 'NYM', 'NYY', 'OAK',
+                        'PHI', 'PIT', 'SD', 'SF', 'SEA', 'STL', 'TB', 'TEX', 'TOR', 'WSH'
+                    }
+                    
+                    if home_team_id not in valid_mlb_teams or away_team_id not in valid_mlb_teams:
+                        continue
+                    
                     # Extract scores
                     home_score = teams.get('home', {}).get('score')
                     away_score = teams.get('away', {}).get('score')

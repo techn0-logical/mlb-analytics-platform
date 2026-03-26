@@ -1,156 +1,112 @@
-# Analytics Engine
 
-A streamlined, production-ready MLB analytics system that combines statistical analysis with machine learning for comprehensive team evaluation and game predictions.
+# Analytics Folder (2026)
 
-## Features
+This folder contains legacy and experimental analytics modules `working_feature_engineering.py` 
 
-- **Team Analysis**: Advanced sabermetrics with trade and injury impact assessment
-- **Game Predictions**: Statistical and hybrid ML-enhanced predictions
-- **Trade Impact**: Automatic evaluation of recent trades on team performance
-- **Injury Analysis**: Assessment of how injuries affect team strength
-- **ML Integration**: Optional machine learning model training and predictions
-- **Professional Caching**: Automatic result caching for improved performance
 
-## Quick Start
+## Current Structure
 
-```python
-from Analytics.analytics_engine import analyze_team, predict_game
+- `working_feature_engineering.py`: The only feature engineering module used by `AdaptiveLearning.py` and `OptimizedMLTrainer.py`.
+- `models/`: Stores legacy model artifacts (not used in current workflow).
 
-# Analyze a team
-team_stats = analyze_team("LAD")
-print(f"{team_stats.team_name}: {team_stats.wins}-{team_stats.losses}")
-print(f"Strength Rating: {team_stats.strength_rating:.3f}")
 
-# Predict a game
-prediction = predict_game("LAD", "SF")
-print(f"Prediction: {prediction.predicted_winner} ({prediction.win_probability:.1%})")
-print(f"Confidence: {prediction.confidence_level}")
-```
+## Purpose
 
-## Core Functions
+This folder is now a holding area for analytics code `working_feature_engineering.py`which is required for model training and feature generation.
 
-### `analyze_team(team_id: str, as_of_date: date = None) -> TeamStats`
 
-Comprehensive team analysis including:
-- Win-loss record and win percentage
-- Pythagorean expectation
-- Recent form (last 10 games)
-- Home field advantage
-- Trade impact (last 30 days)
-- Injury impact assessment
-- Overall strength rating and confidence
+## Usage
 
-### `predict_game(home_team: str, away_team: str, game_date: date = None) -> GamePrediction`
-
-Game prediction using multiple factors:
-- Team strength differential (40% weight)
-- Recent form (25% weight)
-- Injury impact (20% weight)
-- Trade impact (15% weight)
-- Home field advantage (baseline)
-
-Returns prediction with confidence level and key factors.
-
-### Machine Learning Integration
+**To use the current feature engineering system:**
 
 ```python
-from Analytics.analytics_engine import train_ml_model, predict_game_with_ml
+from Analytics.working_feature_engineering import WorkingFeatureEngineer
 
-# Train ML model with historical data
-games_data = [...] # List of game dictionaries
-result = train_ml_model(games_data)
-
-# Use hybrid predictions (statistical + ML)
-hybrid_prediction = predict_game_with_ml("LAD", "SF")
+engineer = WorkingFeatureEngineer()
+features = engineer.create_game_features("NYY", "BOS", date(2025, 4, 15))
+print(features)
 ```
 
-## Data Structures
+## Overview
 
-### TeamStats
-- `team_id`: Team identifier (e.g., "LAD")
-- `team_name`: Full team name
-- `wins/losses`: Season record
-- `win_pct`: Win percentage
-- `strength_rating`: Overall team strength (0.0-1.0)
-- `recent_form`: Recent performance (0.0-1.0)
-- `trade_impact`: Impact of recent trades (-0.5 to 0.5)
-- `injury_impact`: Impact of current injuries (0.0-0.5)
-- `confidence`: Analysis confidence (0.0-1.0)
+`working_feature_engineering.py` is the **sole feature engineering module** used in this project. It is designed to generate robust, production-ready features for MLB game prediction models, focusing on simplicity, reliability, and accuracy. This module is actively used by `AdaptiveLearning.py` and `OptimizedMLTrainer.py`.
 
-### GamePrediction
-- `predicted_winner`: Team ID of predicted winner
-- `win_probability`: Probability of predicted winner (0.5-1.0)
-- `confidence_level`: "high", "medium", or "low"
-- `factors`: List of key factors influencing prediction
-- `prediction_type`: "statistical", "ml", or "hybrid"
+## What It Does
 
-## Configuration
+The module provides the `WorkingFeatureEngineer` class, which:
 
-Global configuration can be modified via the `CONFIG` dictionary:
+- Aggregates and normalizes team batting and pitching statistics from the database
+- Computes recent transaction activity and roster stability
+- Calculates head-to-head matchup features
+- Produces comparative features (batting, pitching, WAR, roster stability advantages)
+- Returns a single, comprehensive feature dictionary for any MLB matchup and date
+
+All features are designed to be numerically stable, normalized, and ready for direct use in machine learning models.
+
+## Key Methods
+
+### `create_game_features(home_team: str, away_team: str, game_date: date) -> Dict[str, float]`
+Generates a full set of features for a given game, including:
+- Team batting features (OPS, OBP, SLG, WAR, depth, etc.)
+- Team pitching features (ERA, WHIP, K/9, BB/9, WAR, depth, etc.)
+- Transaction features (roster activity, acquisitions, trades, stability)
+- Head-to-head matchup features (win rates, scoring, advantage)
+- Comparative features (batting, pitching, WAR, roster stability advantages)
+
+### `create_team_batting_features(team_id: str, as_of_date: date) -> Dict[str, float]`
+Aggregates and normalizes batting stats for a team as of a given date.
+
+### `create_team_pitching_features(team_id: str, as_of_date: date) -> Dict[str, float]`
+Aggregates and normalizes pitching stats for a team as of a given date.
+
+### `create_transaction_features(team_id: str, as_of_date: date, days: int = 30) -> Dict[str, float]`
+Summarizes recent roster transactions and stability for a team.
+
+### `create_head_to_head_features(home_team: str, away_team: str, as_of_date: date) -> Dict[str, float]`
+Summarizes the last 3 years of head-to-head matchups between two teams.
+
+## Example Usage
 
 ```python
-from Analytics.analytics_engine import CONFIG
+from Analytics.working_feature_engineering import WorkingFeatureEngineer
+from datetime import date
 
-CONFIG['confidence_high'] = 0.70  # High confidence threshold
-CONFIG['recent_games_window'] = 15  # Recent form window
-CONFIG['cache_ttl'] = 7200  # Cache time-to-live (seconds)
+engineer = WorkingFeatureEngineer()
+features = engineer.create_game_features("NYY", "BOS", date(2025, 4, 15))
+print(features)
+engineer.close_session()
 ```
 
-## System Status
+## Feature Categories
 
-Check system capabilities and status:
+- **Batting**: OPS, OBP, SLG, WAR, depth, power, production, speed
+- **Pitching**: ERA quality, WHIP quality, K/9, BB/9, WAR, depth, wins, saves
+- **Transactions**: Roster activity, acquisitions, departures, trades, stability
+- **Head-to-Head**: Win rates, scoring, home advantage
+- **Comparative**: Batting, pitching, WAR, and roster stability advantages
 
-```python
-from Analytics.analytics_engine import get_system_status
+## Design Principles
 
-status = get_system_status()
-print(f"Database: {'✅' if status['database_available'] else '❌'}")
-print(f"ML Available: {'✅' if status['ml_available'] else '❌'}")
-print(f"ML Trained: {'✅' if status['ml_trained'] else '❌'}")
-```
-
-## Compatibility
-
-The system includes a compatibility layer for existing code:
-
-```python
-from Analytics.analytics_engine import SabermetricCalculator
-
-# Legacy interface support
-calc = SabermetricCalculator()
-prediction = calc.predict_game("LAD", "SF")
-```
-
-## Performance Features
-
-- **Automatic Caching**: Results cached for 1 hour by default
-- **Database Connection Pooling**: Efficient database access
-- **Error Handling**: Graceful degradation on component failures
-- **Memory Efficient**: Simplified data structures and algorithms
+- **Simplicity**: No complex SQL or fragile logic; all queries are robust and easy to debug
+- **Normalization**: All features are scaled to [0, 1] or meaningful ranges for ML
+- **Fail-Safe Defaults**: If no data is available, reasonable default values are returned
+- **Production-Ready**: Used in all current model training and prediction workflows
 
 ## Dependencies
 
 - **Database**: PostgreSQL with SQLAlchemy ORM
-- **Scientific**: pandas, numpy
-- **ML (Optional)**: scikit-learn, xgboost
-- **System**: Python 3.8+
+- **Python**: 3.8+
+- **ML (downstream)**: scikit-learn, xgboost (not required for feature engineering itself)
 
-## File Size Reduction
+## Testing
 
-**Simplified Version**: 748 lines (56% reduction from original 1,687 lines)
+The module includes a test function for standalone validation:
 
-- Maintained all core functionality
-- Streamlined architecture
-- Simplified but powerful ML integration
-- Professional error handling and caching
-- Clean, readable code structure
+```bash
+python Analytics/working_feature_engineering.py
+```
+This will print a categorized summary of generated features for a sample game.
 
-## Architecture Improvements
+## Maintenance
 
-1. **Single File Design**: All components in one cohesive file
-2. **Simple Functions**: Clear, focused functions with single responsibilities
-3. **Global Configuration**: Easy-to-modify settings
-4. **Minimal Dependencies**: Core functionality with optional advanced features
-5. **Professional Standards**: Proper logging, error handling, and documentation
-
-The simplified analytics engine maintains the power and accuracy of the original system while being significantly more maintainable and easier to understand.
+If you need to extend or modify feature engineering, edit only `working_feature_engineering.py`. All other analytics files have been removed for clarity and maintainability.

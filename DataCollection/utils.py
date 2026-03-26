@@ -5,7 +5,7 @@ import time
 import requests
 import logging
 from typing import Optional
-from datetime import date
+from datetime import date, timedelta
 from .config import config
 
 logger = logging.getLogger(__name__)
@@ -22,11 +22,10 @@ def is_mlb_season(check_date: date) -> bool:
     """Check if date is during MLB season"""
     return 2 <= check_date.month <= 11
 
-def get_collection_dates() -> tuple[date, date, date]:
-    """Get yesterday, today, tomorrow"""
+def get_collection_dates():
     today = date.today()
-    yesterday = date(today.year, today.month, today.day - 1) if today.day > 1 else date(today.year, today.month - 1, 28)
-    tomorrow = date(today.year, today.month, today.day + 1)
+    yesterday = today - timedelta(days=1)
+    tomorrow = today + timedelta(days=1)
     return yesterday, today, tomorrow
 
 def make_api_request(url: str, params: dict = None) -> requests.Response:

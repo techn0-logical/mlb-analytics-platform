@@ -1,6 +1,7 @@
 """
 Simple configuration for MLB data collection
 """
+
 import os
 import sys
 from dataclasses import dataclass
@@ -42,12 +43,25 @@ class CollectionConfig:
     def __post_init__(self):
         if self.team_mapping is None:
             self.team_mapping = {
+                # Standard team mappings
                 'AZ': 'AZ', 'ATL': 'ATL', 'BAL': 'BAL', 'BOS': 'BOS', 'CHC': 'CHC',
-                'CHW': 'CHW', 'CIN': 'CIN', 'CLE': 'CLE', 'COL': 'COL', 'DET': 'DET',
+                'CHW': 'CHW', 'CWS': 'CHW', 'CIN': 'CIN', 'CLE': 'CLE', 'COL': 'COL', 'DET': 'DET',
                 'HOU': 'HOU', 'KC': 'KC', 'LAA': 'LAA', 'LAD': 'LAD', 'MIA': 'MIA',
                 'MIL': 'MIL', 'MIN': 'MIN', 'NYM': 'NYM', 'NYY': 'NYY', 'OAK': 'OAK',
                 'PHI': 'PHI', 'PIT': 'PIT', 'SD': 'SD', 'SF': 'SF', 'SEA': 'SEA',
-                'STL': 'STL', 'TB': 'TB', 'TEX': 'TEX', 'TOR': 'TOR', 'WSH': 'WSH'
+                'STL': 'STL', 'TB': 'TB', 'TEX': 'TEX', 'TOR': 'TOR', 'WSH': 'WSH',
+                
+                # Special mappings for API variations
+                'ATH': 'OAK',  # MLB API sometimes uses ATH for Athletics instead of OAK
+                
+                # Alternative abbreviations that might appear
+                'CWS': 'CHW',  # Chicago White Sox alternative
+                'KCR': 'KC',   # Kansas City Royals alternative
+                'NYA': 'NYY',  # New York Yankees alternative
+                'NYN': 'NYM',  # New York Mets alternative
+                'SFG': 'SF',   # San Francisco Giants alternative
+                'TBD': 'TB',   # Tampa Bay alternative
+                'WSN': 'WSH'   # Washington Nationals alternative
             }
 
 # Global config instance
