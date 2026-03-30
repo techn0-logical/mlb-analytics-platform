@@ -178,52 +178,36 @@ def get_adaptive_parameters():
         }
 
 def apply_adaptive_adjustments(prediction, adaptive_config):
-    """Apply adaptive accuracy calibration to a prediction.
+    """Apply adaptive adjustments to a prediction.
     
-    Adjusts confidence so it reflects actual real-world accuracy.
-    If the model says 70% but historically it's 60% accurate in that range,
-    calibrate the confidence down to be honest.
+    Phase 1 (current): Use raw model confidence directly with honest tier thresholds.
+    Confidence calibration is DISABLED until we have 200+ scored predictions
+    to fit a proper Platt scaling curve. The raw XGBoost probabilities are more
+    trustworthy than bin-based multipliers trained on <50 games.
     
-    No betting thresholds — just calibrated confidence.
+    Adaptive feature weights from AdaptiveLearning are still applied at the
+    feature engineering level — this only controls confidence display.
     """
     try:
-        if not adaptive_config.get('adaptive_active', False):
-            prediction['adaptive_applied'] = False
-            return prediction
-        
         confidence = prediction['confidence']
         confidence_pct = confidence * 100
         
-        # Apply bin-specific confidence calibration
-        calibration = adaptive_config.get('confidence_calibration', {})
-        calibration_factor = 1.0
-        
-        if 50 <= confidence_pct < 60:
-            calibration_factor = calibration.get('50-60%', 1.0)
-        elif 60 <= confidence_pct < 70:
-            calibration_factor = calibration.get('60-70%', 1.0)
-        elif 70 <= confidence_pct < 80:
-            calibration_factor = calibration.get('70-80%', 1.0)
-        elif 80 <= confidence_pct < 90:
-            calibration_factor = calibration.get('80-90%', 1.0)
-        elif confidence_pct >= 90:
-            calibration_factor = calibration.get('90%+', 1.0)
-        
-        calibrated_confidence = min(0.99, max(0.50, confidence * calibration_factor))
-        
-        # Classify confidence level (for display, NOT for betting decisions)
-        if calibrated_confidence >= 0.70:
+        # Raw model output — no calibration multiplier applied
+        # Tier thresholds based on XGBoost output ranges:
+        #   XGBoost rarely outputs >75% for MLB games (inherently uncertain)
+        #   so thresholds are set relative to typical model output range
+        if confidence_pct >= 62:
             confidence_tier = 'HIGH'
-        elif calibrated_confidence >= 0.60:
+        elif confidence_pct >= 56:
             confidence_tier = 'MEDIUM'
         else:
             confidence_tier = 'LOW'
         
         prediction['original_confidence'] = confidence
-        prediction['confidence'] = calibrated_confidence
+        prediction['confidence'] = confidence  # Pass through raw — no warping
         prediction['confidence_tier'] = confidence_tier
-        prediction['adaptive_applied'] = True
-        prediction['calibration_factor'] = calibration_factor
+        prediction['adaptive_applied'] = False  # Calibration disabled until Phase 3
+        prediction['calibration_factor'] = 1.0
         
         return prediction
         
@@ -292,11 +276,6 @@ def make_live_betting_predictions(games):
             features_used = prediction.get('features_used', 0)
             data_quality = min(1.0, (h2h_games + features_used) / 100)
             
-            # Show calibration info
-            if prediction.get('adaptive_applied', False):
-                cal_factor = prediction.get('calibration_factor', 1.0)
-                print(f"   🧠 CALIBRATED: {original_confidence:.1%} → {confidence:.1%} (factor: {cal_factor:.3f})")
-            
             is_high_confidence = confidence_tier == 'HIGH'
             if is_high_confidence:
                 high_confidence_count += 1
@@ -309,7 +288,7 @@ def make_live_betting_predictions(games):
             }.get(confidence_tier, '⚪')
             
             print(f"   🏆 PREDICTED WINNER: {winner}")
-            print(f"   📊 CONFIDENCE: {confidence:.1%}" + (" (calibrated)" if prediction.get('adaptive_applied') else ""))
+            print(f"   📊 CONFIDENCE: {confidence:.1%} (raw model output)")
             print(f"   {tier_emoji} CONFIDENCE TIER: {confidence_tier}")
             print(f"   📈 DATA QUALITY: {data_quality:.3f}")
             print(f"   📚 H2H SAMPLE: {h2h_games} games")

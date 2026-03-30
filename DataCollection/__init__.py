@@ -18,6 +18,7 @@ from .collector import (
     run_score_update, 
     run_trade_update,
     run_player_stats_update,
+    run_pitcher_logs_update,
     run_custom_collection
 )
 from .roster_collection import (
@@ -30,17 +31,24 @@ from .player_stats import (
     collect_daily_player_status,
     collect_all_player_stats
 )
+from .pitcher_game_logs import (
+    collect_pitcher_game_logs,
+    backfill_pitcher_game_logs
+)
 
 __all__ = [
     'run_daily_collection',
     'run_score_update',
     'run_trade_update', 
     'run_player_stats_update',
+    'run_pitcher_logs_update',
     'run_custom_collection',
     'collect_oakland_historical_data',
     'validate_all_teams_data',
     'collect_player_batting_stats',
     'collect_player_pitching_stats', 
     'collect_daily_player_status',
-    'collect_all_player_stats'
+    'collect_all_player_stats',
+    'collect_pitcher_game_logs',
+    'backfill_pitcher_game_logs'
 ]

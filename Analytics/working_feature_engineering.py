@@ -39,6 +39,8 @@ class WorkingFeatureEngineer:
         self._pitching_cache = {}
         self._transaction_cache = {}
         self._h2h_cache = {}
+        self._starter_cache = {}
+        self._bullpen_cache = {}
     
     def get_session(self):
         """Get database session"""
@@ -58,6 +60,8 @@ class WorkingFeatureEngineer:
         self._pitching_cache.clear()
         self._transaction_cache.clear()
         self._h2h_cache.clear()
+        self._starter_cache.clear()
+        self._bullpen_cache.clear()
     
     def create_team_batting_features(self, team_id: str, as_of_date: date, prefix: str = "team") -> Dict[str, float]:
         """Create batting features from player stats aggregation.
@@ -300,6 +304,166 @@ class WorkingFeatureEngineer:
                 f'{prefix}_roster_stability': 0.9
             }
     
+    def create_starter_features(self, team_id: str, as_of_date: date, prefix: str = "team",
+                                  game_pk: int = None) -> Dict[str, float]:
+        """Create starting pitcher features from pitcher_game_logs.
+        
+        For historical games (training): if game_pk is provided, looks up the actual starter.
+        For future games (prediction): identifies the probable starter based on rotation.
+        
+        Features are based on the starter's last 5 starts (rolling form), which captures
+        current performance better than season-level aggregates.
+        
+        Returns normalized features for: ERA, WHIP, K/9, BB/9, quality start rate,
+        average pitch count, and innings depth.
+        """
+        session = self.get_session()
+        cache_key = (team_id, str(as_of_date), game_pk)
+        
+        if cache_key in self._starter_cache:
+            return self._apply_prefix(self._starter_cache[cache_key], prefix)
+        
+        defaults = {
+            'starter_era': 0.500,
+            'starter_whip': 0.500,
+            'starter_k_rate': 0.500,
+            'starter_control': 0.500,
+            'starter_quality_start_pct': 0.500,
+            'starter_avg_ip': 0.500,
+            'starter_avg_pitches': 0.500,
+        }
+        
+        # Step 1: Identify the starter
+        starter_id = None
+        
+        if game_pk:
+            # Historical: look up who actually started
+            row = session.execute(text('''
+                SELECT pitcher_id FROM pitcher_game_logs
+                WHERE game_pk = :gpk AND pitcher_team_id = :team AND is_starter = true
+                LIMIT 1
+            '''), {'gpk': game_pk, 'team': team_id}).fetchone()
+            if row:
+                starter_id = row[0]
+        
+        if not starter_id:
+            # Prediction / fallback: find the most likely next starter
+            # Logic: the pitcher who started most recently for this team,
+            # but NOT in the last 4 days (standard 5-man rotation rest)
+            rest_cutoff = as_of_date - timedelta(days=4)
+            row = session.execute(text('''
+                SELECT pitcher_id FROM pitcher_game_logs
+                WHERE pitcher_team_id = :team AND is_starter = true
+                AND game_date < :as_of AND game_date <= :rest_cutoff
+                ORDER BY game_date DESC
+                LIMIT 1
+            '''), {'team': team_id, 'as_of': as_of_date, 'rest_cutoff': rest_cutoff}).fetchone()
+            if row:
+                starter_id = row[0]
+        
+        if not starter_id:
+            self._starter_cache[cache_key] = defaults
+            return self._apply_prefix(defaults, prefix)
+        
+        # Step 2: Get last 5 starts for this pitcher (before as_of_date)
+        starts = session.execute(text('''
+            SELECT innings_pitched, earned_runs, hits_allowed, walks, strikeouts,
+                   pitches_thrown, is_quality_start
+            FROM pitcher_game_logs
+            WHERE pitcher_id = :pid AND is_starter = true
+            AND game_date < :as_of
+            ORDER BY game_date DESC
+            LIMIT 5
+        '''), {'pid': starter_id, 'as_of': as_of_date}).fetchall()
+        
+        if not starts:
+            self._starter_cache[cache_key] = defaults
+            return self._apply_prefix(defaults, prefix)
+        
+        # Step 3: Compute rolling stats from last 5 starts
+        total_ip = sum(float(s[0]) for s in starts)
+        total_er = sum(int(s[1]) for s in starts)
+        total_h = sum(int(s[2]) for s in starts)
+        total_bb = sum(int(s[3]) for s in starts)
+        total_k = sum(int(s[4]) for s in starts)
+        avg_pitches = sum(int(s[5] or 0) for s in starts) / len(starts)
+        qs_count = sum(1 for s in starts if s[6])
+        
+        era = (9 * total_er / total_ip) if total_ip > 0 else 4.50
+        whip = ((total_h + total_bb) / total_ip) if total_ip > 0 else 1.30
+        k_per_9 = (9 * total_k / total_ip) if total_ip > 0 else 8.0
+        bb_per_9 = (9 * total_bb / total_ip) if total_ip > 0 else 3.5
+        avg_ip = total_ip / len(starts)
+        qs_pct = qs_count / len(starts)
+        
+        result = {
+            'starter_era': max(0, 1 - era / 9.0),          # Lower ERA = higher value
+            'starter_whip': max(0, 1 - whip / 2.5),         # Lower WHIP = higher value
+            'starter_k_rate': min(k_per_9 / 15.0, 1.0),     # Higher K/9 = higher value
+            'starter_control': max(0, 1 - bb_per_9 / 8.0),  # Lower BB/9 = higher value
+            'starter_quality_start_pct': qs_pct,
+            'starter_avg_ip': min(avg_ip / 8.0, 1.0),       # Deeper = better
+            'starter_avg_pitches': min(avg_pitches / 110.0, 1.0),
+        }
+        
+        self._starter_cache[cache_key] = result
+        return self._apply_prefix(result, prefix)
+    
+    def create_bullpen_features(self, team_id: str, as_of_date: date, prefix: str = "team") -> Dict[str, float]:
+        """Create bullpen performance features from pitcher_game_logs.
+        
+        Looks at all relief appearances for this team in the last 14 days.
+        Captures recent bullpen form: ERA, WHIP, K rate, and workload.
+        
+        Returns normalized features.
+        """
+        session = self.get_session()
+        cache_key = (team_id, str(as_of_date))
+        
+        if cache_key in self._bullpen_cache:
+            return self._apply_prefix(self._bullpen_cache[cache_key], prefix)
+        
+        defaults = {
+            'bullpen_era': 0.500,
+            'bullpen_whip': 0.500,
+            'bullpen_k_rate': 0.500,
+        }
+        
+        lookback = as_of_date - timedelta(days=14)
+        
+        result = session.execute(text('''
+            SELECT SUM(innings_pitched), SUM(earned_runs), SUM(hits_allowed),
+                   SUM(walks), SUM(strikeouts), COUNT(*)
+            FROM pitcher_game_logs
+            WHERE pitcher_team_id = :team AND is_starter = false
+            AND game_date >= :lookback AND game_date < :as_of
+        '''), {'team': team_id, 'lookback': lookback, 'as_of': as_of_date}).fetchone()
+        
+        if not result or not result[0] or float(result[0]) == 0:
+            self._bullpen_cache[cache_key] = defaults
+            return self._apply_prefix(defaults, prefix)
+        
+        total_ip, total_er, total_h, total_bb, total_k, appearances = result
+        total_ip = float(total_ip)
+        
+        era = (9 * int(total_er) / total_ip) if total_ip > 0 else 4.50
+        whip = ((int(total_h) + int(total_bb)) / total_ip) if total_ip > 0 else 1.30
+        k_per_9 = (9 * int(total_k) / total_ip) if total_ip > 0 else 8.0
+        
+        bp_result = {
+            'bullpen_era': max(0, 1 - era / 9.0),
+            'bullpen_whip': max(0, 1 - whip / 2.5),
+            'bullpen_k_rate': min(k_per_9 / 15.0, 1.0),
+        }
+        
+        self._bullpen_cache[cache_key] = bp_result
+        return self._apply_prefix(bp_result, prefix)
+    
+    @staticmethod
+    def _apply_prefix(features: Dict[str, float], prefix: str) -> Dict[str, float]:
+        """Apply a prefix (home/away) to feature names"""
+        return {f'{prefix}_{k}': v for k, v in features.items()}
+    
     def create_head_to_head_features(self, home_team: str, away_team: str, as_of_date: date) -> Dict[str, float]:
         """Create head-to-head matchup features (bidirectional — checks both home/away combos).
         
@@ -384,8 +548,16 @@ class WorkingFeatureEngineer:
         self._h2h_cache[cache_key] = h2h_result
         return h2h_result
     
-    def create_game_features(self, home_team: str, away_team: str, game_date) -> Dict[str, float]:
-        """Create comprehensive game features with consistent home/away naming"""
+    def create_game_features(self, home_team: str, away_team: str, game_date,
+                              home_game_pk: int = None) -> Dict[str, float]:
+        """Create comprehensive game features with consistent home/away naming.
+        
+        Args:
+            home_team: Home team abbreviation
+            away_team: Away team abbreviation
+            game_date: Date of the game
+            home_game_pk: Optional game_pk for historical games (enables exact starter lookup)
+        """
         
         # Ensure game_date is a date object, not a string
         if isinstance(game_date, str):
@@ -408,6 +580,20 @@ class WorkingFeatureEngineer:
         features.update(home_pitching)
         features.update(away_pitching)
         
+        # Starting pitcher features (rolling form from game logs)
+        home_starter = self.create_starter_features(home_team, game_date, prefix="home",
+                                                     game_pk=home_game_pk)
+        away_starter = self.create_starter_features(away_team, game_date, prefix="away",
+                                                     game_pk=home_game_pk)
+        features.update(home_starter)
+        features.update(away_starter)
+        
+        # Bullpen features (last 14 days from game logs)
+        home_bullpen = self.create_bullpen_features(home_team, game_date, prefix="home")
+        away_bullpen = self.create_bullpen_features(away_team, game_date, prefix="away")
+        features.update(home_bullpen)
+        features.update(away_bullpen)
+        
         # Transaction features (using generic home/away prefixes)
         home_transactions = self.create_transaction_features(home_team, game_date, prefix="home")
         away_transactions = self.create_transaction_features(away_team, game_date, prefix="away")
@@ -423,7 +609,9 @@ class WorkingFeatureEngineer:
             'batting_advantage': features.get('home_ops', 0.5) - features.get('away_ops', 0.5),
             'pitching_advantage': features.get('home_era_quality', 0.5) - features.get('away_era_quality', 0.5),
             'war_advantage': features.get('home_batting_war', 0.5) - features.get('away_batting_war', 0.5),
-            'roster_stability_advantage': features.get('home_roster_stability', 0.5) - features.get('away_roster_stability', 0.5)
+            'roster_stability_advantage': features.get('home_roster_stability', 0.5) - features.get('away_roster_stability', 0.5),
+            'starter_era_advantage': features.get('home_starter_era', 0.5) - features.get('away_starter_era', 0.5),
+            'bullpen_era_advantage': features.get('home_bullpen_era', 0.5) - features.get('away_bullpen_era', 0.5),
         })
         
         return features

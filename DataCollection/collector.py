@@ -4,7 +4,7 @@ Main collection orchestrator - simple and clean
 import logging
 import sys
 import os
-from datetime import date
+from datetime import date, timedelta
 from typing import List, Dict
 
 # Add project root to path
@@ -19,6 +19,7 @@ try:
     from .weather import collect_weather
     from .player_stats import collect_all_player_stats, collect_daily_player_status
     from .roster_collection import validate_all_teams_data
+    from .pitcher_game_logs import collect_pitcher_game_logs
 except ImportError:
     # Fallback for command line usage
     from DataCollection.utils import get_collection_dates, is_mlb_season, log_error
@@ -27,6 +28,7 @@ except ImportError:
     from DataCollection.weather import collect_weather
     from DataCollection.player_stats import collect_all_player_stats, collect_daily_player_status
     from DataCollection.roster_collection import validate_all_teams_data
+    from DataCollection.pitcher_game_logs import collect_pitcher_game_logs
 
 # Configure logging
 logging.basicConfig(
@@ -70,6 +72,15 @@ def run_daily_collection() -> Dict:
         logger.info("🏟️ Collecting game data (scores, schedules, status)")
         games_result = collect_games(active_dates)
         results.append(games_result)
+        
+        # Pitcher Game Logs (per-game pitching lines from boxscores)
+        logger.info("⚾ Collecting pitcher game logs from completed games")
+        try:
+            pitcher_log_result = collect_pitcher_game_logs(yesterday)
+            results.append(pitcher_log_result)
+            logger.info(f"   ✅ Pitcher logs: {pitcher_log_result.get('inserted', 0)} lines from {pitcher_log_result.get('games', 0)} games")
+        except Exception as e:
+            log_error("Pitcher Game Logs", f"Pitcher game log collection failed (non-critical): {e}")
         
         # Transaction Data (roster changes)
         logger.info("🔄 Collecting transaction data (trades, signings, IL moves)")
@@ -240,6 +251,20 @@ def run_player_stats_update(season: int = None) -> Dict:
         'results': result.get('results', [])
     }
 
+def run_pitcher_logs_update(target_date: date = None) -> Dict:
+    """Collect pitcher game logs for yesterday (or a specific date)"""
+    target_date = target_date or (date.today() - timedelta(days=1))
+    logger.info(f"⚾ Collecting pitcher game logs for {target_date}")
+    
+    result = collect_pitcher_game_logs(target_date)
+    
+    return {
+        'overall_success': result.get('success', False),
+        'total_changes': result.get('inserted', 0),
+        'results': [result],
+        'collection_type': 'pitcher_logs'
+    }
+
 def run_multi_season_player_stats(seasons: List[int] = None) -> Dict:
     """
     Run player stats collection for multiple seasons
@@ -336,6 +361,8 @@ if __name__ == "__main__":
             result = run_trade_update()
         elif mode == 'players':
             result = run_player_stats_update()
+        elif mode == 'pitcher-logs':
+            result = run_pitcher_logs_update()
         elif mode == 'multi-season':
             # Allow specifying seasons as additional arguments
             if len(sys.argv) > 2:
@@ -344,12 +371,13 @@ if __name__ == "__main__":
             else:
                 result = run_multi_season_player_stats()  # Use default [2023, 2024, 2025]
         else:
-            print("Usage: python collector.py [daily|lightweight|scores|trades|players|multi-season [year1 year2 ...]]")
-            print("  daily: Comprehensive collection (games, transactions, weather, player stats, roster)")
+            print("Usage: python collector.py [daily|lightweight|scores|trades|players|pitcher-logs|multi-season [year1 year2 ...]]")
+            print("  daily: Comprehensive collection (games, transactions, weather, player stats, pitcher logs, roster)")
             print("  lightweight: Original collection (games, transactions, weather, daily status)")
             print("  scores: Game scores only")
             print("  trades: Transactions only") 
             print("  players: Player statistics only")
+            print("  pitcher-logs: Pitcher game logs (yesterday's boxscores)")
             print("  multi-season: Multi-season player stats")
             sys.exit(1)
     else:

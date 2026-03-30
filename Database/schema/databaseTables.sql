@@ -280,12 +280,12 @@ CREATE TABLE IF NOT EXISTS player_pitching_stats (
     balks INTEGER DEFAULT 0,
     
     -- Traditional rate stats
-    era DECIMAL(4,2),
-    whip DECIMAL(4,2),
+    era DECIMAL(6,2),
+    whip DECIMAL(6,2),
     
     -- Advanced sabermetrics
-    fip DECIMAL(4,2),
-    xfip DECIMAL(4,2),
+    fip DECIMAL(6,2),
+    xfip DECIMAL(6,2),
     siera DECIMAL(4,2),
     war DECIMAL(4,1),
     
@@ -906,13 +906,13 @@ CREATE TABLE advanced_team_pitching_metrics (
     as_of_date DATE NOT NULL,
     
     -- Traditional stats
-    era DECIMAL(4,2),
-    whip DECIMAL(4,2),
+    era DECIMAL(6,2),
+    whip DECIMAL(6,2),
     
     -- Advanced sabermetric stats
-    fip DECIMAL(4,2),                    -- Fielding Independent Pitching
-    xfip DECIMAL(4,2),                   -- Expected FIP
-    siera DECIMAL(4,2),                  -- Skill-Interactive ERA
+    fip DECIMAL(6,2),                    -- Fielding Independent Pitching
+    xfip DECIMAL(6,2),                   -- Expected FIP
+    siera DECIMAL(6,2),                  -- Skill-Interactive ERA
     k_percent DECIMAL(5,2),              -- Strikeout percentage
     bb_percent DECIMAL(5,2),             -- Walk percentage  
     k_bb_percent DECIMAL(5,2),           -- K-BB percentage

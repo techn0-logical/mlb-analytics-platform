@@ -408,6 +408,7 @@ class OptimizedMLTrainer:
             # Spring training (Feb-Mar) has different rosters, no strategy, and random outcomes
             games_query = text("""
                 SELECT 
+                    game_pk,
                     home_team_id, 
                     away_team_id, 
                     winner_team_id, 
@@ -439,10 +440,14 @@ class OptimizedMLTrainer:
                 away_team = game.away_team_id
                 winner = game.winner_team_id
                 game_date = game.game_date
+                game_pk = game.game_pk
                 
                 try:
                     # Create features using the new comprehensive feature engineering
-                    features = self.feature_engineer.create_game_features(home_team, away_team, game_date)
+                    # Pass game_pk so starter features can look up the actual starter
+                    features = self.feature_engineer.create_game_features(
+                        home_team, away_team, game_date, home_game_pk=game_pk
+                    )
                     
                     if not features or len(features) < 10:  # Basic data quality check
                         continue  # Skip games with insufficient data

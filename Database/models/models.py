@@ -251,9 +251,9 @@ class TeamStats(BaseModel):
     runs_scored = Column(Integer, default=0)
     runs_allowed = Column(Integer, default=0)
     batting_avg = Column(DECIMAL(4, 3))  # .000 to 1.000
-    era = Column(DECIMAL(4, 2))  # Earned Run Average
+    era = Column(DECIMAL(6, 2))  # Earned Run Average
     ops = Column(DECIMAL(4, 3))  # On-base Plus Slugging
-    whip = Column(DECIMAL(4, 2))  # Walks + Hits per Inning Pitched
+    whip = Column(DECIMAL(6, 2))  # Walks + Hits per Inning Pitched
     
     # Relationship
     team = relationship("Team", back_populates="team_stats")
@@ -1269,12 +1269,12 @@ class PlayerPitchingStats(BaseModel):
     strikeouts = Column(Integer, default=0)
     
     # Traditional rate stats
-    era = Column(DECIMAL(4, 2), nullable=True, comment='Earned Run Average')
-    whip = Column(DECIMAL(4, 2), nullable=True, comment='Walks + Hits per Inning Pitched')
+    era = Column(DECIMAL(6, 2), nullable=True, comment='Earned Run Average')
+    whip = Column(DECIMAL(6, 2), nullable=True, comment='Walks + Hits per Inning Pitched')
     
     # Advanced sabermetrics
-    fip = Column(DECIMAL(4, 2), nullable=True, comment='Fielding Independent Pitching')
-    xfip = Column(DECIMAL(4, 2), nullable=True, comment='Expected Fielding Independent Pitching')
+    fip = Column(DECIMAL(6, 2), nullable=True, comment='Fielding Independent Pitching')
+    xfip = Column(DECIMAL(6, 2), nullable=True, comment='Expected Fielding Independent Pitching')
     war = Column(DECIMAL(4, 1), nullable=True, comment='Wins Above Replacement')
     
     # Stuff+ metrics (Advanced pitch modeling)
@@ -1437,6 +1437,69 @@ class PitcherTeamMatchup(BaseModel):
         return ((era_score + whip_score) / 2) * reliability_weight
 
 
+class PitcherGameLog(BaseModel):
+    """Per-game pitching lines from MLB boxscores for opponent-specific analysis"""
+    __tablename__ = 'pitcher_game_logs'
+    
+    # Primary key
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    
+    # Foreign keys
+    game_pk = Column(BigInteger, ForeignKey('games.game_pk'), nullable=False)
+    pitcher_id = Column(BigInteger, ForeignKey('players.player_id'), nullable=False)
+    pitcher_team_id = Column(String(3), ForeignKey('teams.team_id'), nullable=False)
+    opposing_team_id = Column(String(3), ForeignKey('teams.team_id'), nullable=False)
+    game_date = Column(Date, nullable=False)
+    season = Column(Integer, nullable=False)
+    
+    # Game role
+    is_starter = Column(Boolean, default=False, nullable=False)
+    is_winner = Column(Boolean, default=False)
+    is_loser = Column(Boolean, default=False)
+    is_save = Column(Boolean, default=False)
+    is_hold = Column(Boolean, default=False)
+    
+    # Pitching line
+    innings_pitched = Column(DECIMAL(4, 1), nullable=False, default=0.0)
+    hits_allowed = Column(Integer, nullable=False, default=0)
+    runs_allowed = Column(Integer, nullable=False, default=0)
+    earned_runs = Column(Integer, nullable=False, default=0)
+    walks = Column(Integer, nullable=False, default=0)
+    strikeouts = Column(Integer, nullable=False, default=0)
+    home_runs_allowed = Column(Integer, nullable=False, default=0)
+    pitches_thrown = Column(Integer, default=0)
+    strikes = Column(Integer, default=0)
+    batters_faced = Column(Integer, default=0)
+    
+    # Additional stats
+    ground_outs = Column(Integer, default=0)
+    fly_outs = Column(Integer, default=0)
+    wild_pitches = Column(Integer, default=0)
+    hit_batsmen = Column(Integer, default=0)
+    inherited_runners = Column(Integer, default=0)
+    inherited_runners_scored = Column(Integer, default=0)
+    
+    # Flags
+    is_quality_start = Column(Boolean, default=False)
+    
+    # Summary text from API
+    summary = Column(Text, nullable=True)
+    
+    # Relationships
+    game = relationship("Game")
+    pitcher = relationship("Player")
+    pitcher_team = relationship("Team", foreign_keys=[pitcher_team_id])
+    opposing_team = relationship("Team", foreign_keys=[opposing_team_id])
+    
+    # Unique constraint
+    __table_args__ = (
+        UniqueConstraint('game_pk', 'pitcher_id', name='uq_pitcher_game_log'),
+    )
+    
+    def __repr__(self):
+        return f"<PitcherGameLog(pitcher={self.pitcher_id}, game={self.game_pk}, IP={self.innings_pitched}, ER={self.earned_runs})>"
+
+
 class BullpenTeamMatchup(BaseModel):
     """Bullpen performance vs specific teams for closer and relief analysis"""
     __tablename__ = 'bullpen_team_matchups'
@@ -1560,6 +1623,7 @@ __all__ = [
     
     # Pitcher matchup models
     'PitcherTeamMatchup',
+    'PitcherGameLog',
     'BullpenTeamMatchup',
     'GamePrediction',
     
@@ -1592,6 +1656,7 @@ MODEL_REGISTRY = {
     'player_matchups': PlayerMatchup,
     'player_matchup_summaries': PlayerMatchupSummary,
     'pitcher_team_matchups': PitcherTeamMatchup,
+    'pitcher_game_logs': PitcherGameLog,
     'bullpen_team_matchups': BullpenTeamMatchup,
     'game_predictions': GamePrediction,
     'mlb_transactions': MLBTransaction,
