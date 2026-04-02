@@ -111,6 +111,68 @@ class PlayerStatsCollector:
         logger.info(f"📅 Season {season}: Future season → using spring training stats (gameType=S)")
         return 'S'
     
+    def _purge_spring_training_holdovers(self, season: int, game_type: str, stat_table: str) -> int:
+        """
+        Purge spring training holdover rows when collecting regular season data.
+        
+        During the transition from spring training to regular season, players who
+        were on the spring training roster but didn't make the Opening Day roster
+        keep their inflated spring training stats forever (they never get overwritten
+        because the collector only updates players on the current active roster).
+        
+        This method detects and removes those stale rows by comparing game counts
+        against the maximum possible regular season games played so far.
+        
+        Only runs during the first ~4 weeks of regular season when the gap between
+        spring training games (15-25) and regular season games (1-10) is obvious.
+        After May 1, spring training game counts overlap with regular season and
+        this method becomes a no-op.
+        
+        Args:
+            season: The season year being collected
+            game_type: 'R' for regular season, 'S' for spring training
+            stat_table: 'player_batting_stats' or 'player_pitching_stats'
+            
+        Returns:
+            Number of rows purged
+        """
+        if game_type != 'R':
+            return 0
+        
+        today = date.today()
+        
+        # Only run this in the first few weeks of regular season (through April 30)
+        # After that, regular season game counts catch up and this heuristic breaks
+        if today.month >= 5:
+            return 0
+        
+        # Calculate max possible regular season games (roughly 1 game per day since opening)
+        regular_season_start = date(
+            today.year,
+            self.REGULAR_SEASON_START_MONTH_DAY[0],
+            self.REGULAR_SEASON_START_MONTH_DAY[1]
+        )
+        days_since_start = (today - regular_season_start).days
+        max_expected_games = max(days_since_start + 2, 5)  # Buffer of 2, minimum 5
+        
+        try:
+            result = self.session.execute(text(f"""
+                DELETE FROM {stat_table}
+                WHERE season = :season AND games > :max_games
+            """), {'season': season, 'max_games': max_expected_games})
+            
+            purged = result.rowcount
+            if purged > 0:
+                self.session.commit()
+                logger.info(f"🧹 Purged {purged} spring training holdovers from {stat_table} "
+                           f"(season={season}, games > {max_expected_games})")
+            return purged
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error purging spring training holdovers from {stat_table}: {e}")
+            self.session.rollback()
+            return 0
+    
     def _make_api_request(self, endpoint: str, params: dict = None) -> dict:
         """Make a request to the MLB Stats API"""
         if not self.api_available:
@@ -225,6 +287,10 @@ class PlayerStatsCollector:
         current_season = season or date.today().year
         game_type = self._determine_game_type(current_season)
         game_type_label = "spring training" if game_type == 'S' else "regular season"
+        
+        # Purge spring training holdovers before collecting regular season data
+        self._purge_spring_training_holdovers(current_season, game_type, 'player_batting_stats')
+        
         logger.info(f"🏏 Collecting {current_season} {game_type_label} batting statistics (roster-based)...")
         
         total_inserted = 0
@@ -255,21 +321,25 @@ class PlayerStatsCollector:
                         if not player_id:
                             continue
                         
-                        # Fetch individual player's batting stats
+                        # Fetch season + sabermetrics in one call
                         stats_data = self._make_api_request(f'people/{player_id}/stats', {
-                            'stats': 'season',
+                            'stats': 'season,sabermetrics',
                             'season': current_season,
                             'gameType': game_type,
                             'group': 'hitting'
                         })
                         
                         stat_info = None
+                        saber_info = {}
                         if stats_data.get('stats'):
                             for sg in stats_data['stats']:
+                                stat_type = sg.get('type', {}).get('displayName', '')
                                 splits = sg.get('splits', [])
                                 if splits:
-                                    stat_info = splits[0].get('stat', {})
-                                    break
+                                    if stat_type == 'sabermetrics':
+                                        saber_info = splits[0].get('stat', {})
+                                    else:
+                                        stat_info = splits[0].get('stat', {})
                         
                         if not stat_info or int(stat_info.get('atBats', 0)) == 0:
                             total_skipped += 1
@@ -280,9 +350,10 @@ class PlayerStatsCollector:
                             total_skipped += 1
                             continue
                         
-                        # Map to database format
+                        # Map to database format (pass sabermetrics for advanced stats)
                         player_data = self._map_leaderboard_batting_data(
-                            stat_info, player_id, team_abbr, current_season
+                            stat_info, player_id, team_abbr, current_season,
+                            sabermetrics=saber_info
                         )
                         
                         if not player_data:
@@ -349,6 +420,10 @@ class PlayerStatsCollector:
         current_season = season or date.today().year
         game_type = self._determine_game_type(current_season)
         game_type_label = "spring training" if game_type == 'S' else "regular season"
+        
+        # Purge spring training holdovers before collecting regular season data
+        self._purge_spring_training_holdovers(current_season, game_type, 'player_pitching_stats')
+        
         logger.info(f"⚾ Collecting {current_season} {game_type_label} pitching statistics (roster-based)...")
         
         total_inserted = 0
@@ -378,21 +453,25 @@ class PlayerStatsCollector:
                         if not player_id:
                             continue
                         
-                        # Fetch individual player's pitching stats
+                        # Fetch season + sabermetrics in one call
                         stats_data = self._make_api_request(f'people/{player_id}/stats', {
-                            'stats': 'season',
+                            'stats': 'season,sabermetrics',
                             'season': current_season,
                             'gameType': game_type,
                             'group': 'pitching'
                         })
                         
                         stat_info = None
+                        saber_info = {}
                         if stats_data.get('stats'):
                             for sg in stats_data['stats']:
+                                stat_type = sg.get('type', {}).get('displayName', '')
                                 splits = sg.get('splits', [])
                                 if splits:
-                                    stat_info = splits[0].get('stat', {})
-                                    break
+                                    if stat_type == 'sabermetrics':
+                                        saber_info = splits[0].get('stat', {})
+                                    else:
+                                        stat_info = splits[0].get('stat', {})
                         
                         if not stat_info or float(stat_info.get('inningsPitched', 0)) == 0:
                             total_skipped += 1
@@ -403,9 +482,10 @@ class PlayerStatsCollector:
                             total_skipped += 1
                             continue
                         
-                        # Map to database format
+                        # Map to database format (pass sabermetrics for advanced stats)
                         player_data = self._map_leaderboard_pitching_data(
-                            stat_info, player_id, team_abbr, current_season
+                            stat_info, player_id, team_abbr, current_season,
+                            sabermetrics=saber_info
                         )
                         
                         if not player_data:
@@ -729,37 +809,30 @@ class PlayerStatsCollector:
             'player_id': player_id,
             'season': season,
             'team_id': team_id,
-            'games_played': safe_int(stats.get('gamesPlayed')),
+            'games': safe_int(stats.get('gamesPlayed')),
             'plate_appearances': safe_int(stats.get('plateAppearances')),
             'at_bats': safe_int(stats.get('atBats')),
             'runs': safe_int(stats.get('runs')),
             'hits': safe_int(stats.get('hits')),
-            'doubles': safe_int(stats.get('doubles')),
-            'triples': safe_int(stats.get('triples')),
             'home_runs': safe_int(stats.get('homeRuns')),
-            'rbi': safe_int(stats.get('rbi')),
+            'rbis': safe_int(stats.get('rbi')),
             'stolen_bases': safe_int(stats.get('stolenBases')),
-            'caught_stealing': safe_int(stats.get('caughtStealing')),
             'walks': safe_int(stats.get('baseOnBalls')),
             'strikeouts': safe_int(stats.get('strikeOuts')),
             'batting_average': safe_float(stats.get('avg')),
             'on_base_percentage': safe_float(stats.get('obp')),
             'slugging_percentage': safe_float(stats.get('slg')),
             'ops': safe_float(stats.get('ops')),
-            'hit_by_pitch': safe_int(stats.get('hitByPitch')),
-            'sacrifice_hits': safe_int(stats.get('sacBunts')),
-            'sacrifice_flies': safe_int(stats.get('sacFlies')),
-            'intentional_walks': safe_int(stats.get('intentionalWalks')),
-            'left_on_base': safe_int(stats.get('leftOnBase')),
-            'wrc_plus': None,  # Not available in MLB Stats API
-            'war': None,       # Not available in MLB Stats API
-            'last_updated': datetime.now()
         }
     
-    def _map_leaderboard_batting_data(self, stats: Dict, player_id: int, team_id: str, season: int) -> Dict[str, Any]:
-        """Map MLB Stats API leaderboard batting data to database schema"""
+    def _map_leaderboard_batting_data(self, stats: Dict, player_id: int, team_id: str, season: int,
+                                      sabermetrics: Dict = None) -> Dict[str, Any]:
+        """Map MLB Stats API season + sabermetrics batting data to database schema"""
         
-        def safe_float(value, default=0.0):
+        if sabermetrics is None:
+            sabermetrics = {}
+        
+        def safe_float(value, default=None):
             if value is None or value == '':
                 return default
             try:
@@ -789,21 +862,65 @@ class PlayerStatsCollector:
             'stolen_bases': safe_int(stats.get('stolenBases')),
             'walks': safe_int(stats.get('baseOnBalls')),
             'strikeouts': safe_int(stats.get('strikeOuts')),
-            'batting_average': safe_float(stats.get('avg')),
-            'on_base_percentage': safe_float(stats.get('obp')),
-            'slugging_percentage': safe_float(stats.get('slg')),
-            'ops': safe_float(stats.get('ops')),
-            # Advanced stats (set to None for now)
-            'woba': None,
-            'wrc_plus': None,
-            'war': None,
-            'avg_exit_velocity': None,
-            'hard_hit_percent': None,
-            'barrel_percent': None
+            'batting_average': safe_float(stats.get('avg'), 0.0),
+            'on_base_percentage': safe_float(stats.get('obp'), 0.0),
+            'slugging_percentage': safe_float(stats.get('slg'), 0.0),
+            'ops': safe_float(stats.get('ops'), 0.0),
+            # Advanced stats from sabermetrics endpoint
+            'woba': safe_float(sabermetrics.get('woba')),
+            'wrc_plus': safe_int(sabermetrics.get('wRcPlus')) if sabermetrics.get('wRcPlus') is not None else None,
+            'war': safe_float(sabermetrics.get('war')),
         }
     
-    def _map_leaderboard_pitching_data(self, stats: Dict, player_id: int, team_id: str, season: int) -> Dict[str, Any]:
-        """Map MLB Stats API leaderboard pitching data to database schema"""
+    def _map_leaderboard_pitching_data(self, stats: Dict, player_id: int, team_id: str, season: int,
+                                       sabermetrics: Dict = None) -> Dict[str, Any]:
+        """Map MLB Stats API season + sabermetrics pitching data to database schema"""
+        
+        if sabermetrics is None:
+            sabermetrics = {}
+        
+        def safe_float(value, default=None):
+            if value is None or value == '':
+                return default
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return default
+        
+        def safe_int(value, default=0):
+            if value is None or value == '':
+                return default
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                return default
+        
+        return {
+            'player_id': player_id,
+            'season': season,
+            'team_id': team_id,
+            'games': safe_int(stats.get('gamesPlayed')),
+            'games_started': safe_int(stats.get('gamesStarted')),
+            'wins': safe_int(stats.get('wins')),
+            'losses': safe_int(stats.get('losses')),
+            'saves': safe_int(stats.get('saves')),
+            'innings_pitched': safe_float(stats.get('inningsPitched'), 0.0),
+            'hits_allowed': safe_int(stats.get('hits')),
+            'runs_allowed': safe_int(stats.get('runs')),
+            'earned_runs_allowed': safe_int(stats.get('earnedRuns')),
+            'walks_allowed': safe_int(stats.get('baseOnBalls')),
+            'strikeouts': safe_int(stats.get('strikeOuts')),
+            'home_runs_allowed': safe_int(stats.get('homeRuns')),
+            'era': safe_float(stats.get('era'), 0.0),
+            'whip': safe_float(stats.get('whip'), 0.0),
+            # Advanced stats from sabermetrics endpoint
+            'fip': safe_float(sabermetrics.get('fip')),
+            'xfip': safe_float(sabermetrics.get('xfip')),
+            'war': safe_float(sabermetrics.get('war')),
+        }
+    
+    def _map_mlb_pitching_data(self, stats: Dict, player_id: int, team_id: str, season: int) -> Dict[str, Any]:
+        """Map MLB Stats API pitching data to database schema"""
         
         def safe_float(value, default=0.0):
             if value is None or value == '':
@@ -839,69 +956,6 @@ class PlayerStatsCollector:
             'home_runs_allowed': safe_int(stats.get('homeRuns')),
             'era': safe_float(stats.get('era')),
             'whip': safe_float(stats.get('whip')),
-            # Advanced stats (set to None for now)
-            'fip': None,
-            'xfip': None,
-            'war': None,
-            'stuff_plus': None,
-            'location_plus': None,
-            'pitching_plus': None,
-            'starter_reliever': None
-        }
-    
-    def _map_mlb_pitching_data(self, stats: Dict, player_id: int, team_id: str, season: int) -> Dict[str, Any]:
-        """Map MLB Stats API pitching data to database schema"""
-        
-        def safe_float(value, default=0.0):
-            if value is None or value == '':
-                return default
-            try:
-                return float(value)
-            except (ValueError, TypeError):
-                return default
-        
-        def safe_int(value, default=0):
-            if value is None or value == '':
-                return default
-            try:
-                return int(value)
-            except (ValueError, TypeError):
-                return default
-        
-        return {
-            'player_id': player_id,
-            'season': season,
-            'team_id': team_id,
-            'games_played': safe_int(stats.get('gamesPlayed')),
-            'games_started': safe_int(stats.get('gamesStarted')),
-            'wins': safe_int(stats.get('wins')),
-            'losses': safe_int(stats.get('losses')),
-            'saves': safe_int(stats.get('saves')),
-            'innings_pitched': safe_float(stats.get('inningsPitched')),
-            'hits_allowed': safe_int(stats.get('hits')),
-            'runs_allowed': safe_int(stats.get('runs')),
-            'earned_runs': safe_int(stats.get('earnedRuns')),
-            'walks': safe_int(stats.get('baseOnBalls')),
-            'strikeouts': safe_int(stats.get('strikeOuts')),
-            'home_runs_allowed': safe_int(stats.get('homeRuns')),
-            'era': safe_float(stats.get('era')),
-            'whip': safe_float(stats.get('whip')),
-            'k_9': safe_float(stats.get('strikeoutsPer9Inn')),
-            'bb_9': safe_float(stats.get('walksPer9Inn')),
-            'hr_9': safe_float(stats.get('homeRunsPer9')),
-            'k_bb_ratio': safe_float(stats.get('strikeoutWalkRatio')),
-            'babip': None,     # Not directly available in MLB Stats API
-            'fip': None,       # Not available in MLB Stats API
-            'xfip': None,      # Not available in MLB Stats API
-            'war': None,       # Not available in MLB Stats API
-            'complete_games': safe_int(stats.get('completeGames')),
-            'shutouts': safe_int(stats.get('shutouts')),
-            'holds': safe_int(stats.get('holds')),
-            'blown_saves': safe_int(stats.get('blownSaves')),
-            'hit_by_pitch': safe_int(stats.get('hitBatsmen')),
-            'wild_pitches': safe_int(stats.get('wildPitches')),
-            'balks': safe_int(stats.get('balks')),
-            'last_updated': datetime.now()
         }
     
     def _collect_team_daily_status(self, team_id: str, target_date: date, game_pk: int) -> Tuple[int, int]:

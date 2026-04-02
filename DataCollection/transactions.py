@@ -72,6 +72,11 @@ def collect_transactions_for_date(target_date: date) -> tuple[int, int, int]:
                 if 'person' in transaction:
                     player_id = transaction['person'].get('id')
                 
+                # Skip transactions without a player_id (e.g. cash-only trades)
+                # The DB requires player_id to be NOT NULL
+                if player_id is None:
+                    continue
+                
                 if 'fromTeam' in transaction:
                     from_team_name = transaction['fromTeam'].get('name', '')
                     from_team_id = normalize_team_name(from_team_name)
@@ -97,6 +102,7 @@ def collect_transactions_for_date(target_date: date) -> tuple[int, int, int]:
                 inserted += 1
                 
             except Exception as e:
+                session.rollback()
                 log_error("Transactions", f"Error processing transaction {transaction.get('id', 'unknown')}: {e}")
                 continue
         
